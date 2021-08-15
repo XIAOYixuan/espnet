@@ -161,7 +161,8 @@ for subset in ["train", "valid", "test"]:
 
                 wav = " ".join(
                     [
-                        '"| sox {} -r 16k -t wav -c 1 -b 16 -e signed - trim {} {} remix {}"'.format(
+                        '"| sox {} -r 16k -t wav -c 1 -b 16 -e signed - '
+                        + 'trim {} {} remix {}"'.format(
                             sph[dialogue_id],
                             dial_acts[c]["start"],
                             dial_acts[c]["dur"],

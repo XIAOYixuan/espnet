@@ -18,8 +18,14 @@ parser.add_argument("nxt_path", type=str, help="Path to NXT annotation (LDC2009T
 parser.add_argument(
     "--context", type=int, default=1, help="Number of utterances in the context"
 )
+parser.add_argument(
+    "--audio-context", type=float, default=0.0, help="Length of audio in the context"
+)
 
 args = parser.parse_args()
+
+if args.context > 1 and args.audio_context > 0.0:
+    sys.exit("Do not set both context and audio context at the same time")
 
 xml_path = os.path.join(args.nxt_path, "nxt_switchboard_ann", "xml")
 
@@ -53,11 +59,16 @@ for subset in ["train", "valid", "test"]:
 
     if args.context > 1:
         subset_dir += "_context" + str(args.context)
+    elif args.audio_context > 0.0:
+        subset_dir += "_audio{:03}".format(int(args.audio_context * 10))
 
-    with open(os.path.join("data", subset_dir, "text"), "w") as text_f, open(
-        os.path.join("data", subset_dir, "wav.scp"), "w"
+    subset_dir = os.path.join("data", subset_dir)
+    os.makedirs(subset_dir, exist_ok=True)
+
+    with open(os.path.join(subset_dir, "text"), "w") as text_f, open(
+        os.path.join(subset_dir, "wav.scp"), "w"
     ) as wav_scp_f, open(
-        os.path.join("data", subset_dir, "utt2spk"), "w"
+        os.path.join(subset_dir, "utt2spk"), "w"
     ) as utt2spk_f, open(
         os.path.join("local", subset + ".lst")
     ) as dialogues_f:
@@ -143,6 +154,7 @@ for subset in ["train", "valid", "test"]:
                     dial_acts[dial_act_id] = {
                         "utt": utt_id,
                         "start": start,
+                        "end": end,
                         "dur": dur,
                         "channel": channel[role],
                         "text": words,
@@ -150,31 +162,40 @@ for subset in ["train", "valid", "test"]:
                     }
 
             for dial_act_id in dial_acts:
-                context = [dial_act_id]
+                if args.audio_context > 0.0:
+                    start = max(dial_acts[dial_act_id]["end"] - args.audio_context, 0.0)
+                    dur = dial_acts[dial_act_id]["end"] - start
+                    wav_scp_f.write(
+                        "{} sox {} -r 16k -t wav -c 1 -b 16 -e signed - trim {} {} |\n".format(
+                            dial_acts[dial_act_id]["utt"], sph[dialogue_id], start, dur)
+                    )
+                else:
+                    context = [dial_act_id]
 
-                for i in range(1, args.context):
-                    context_dial_act_id = str(int(dial_act_id) - i)
-                    if context_dial_act_id in dial_acts:
-                        context.append(context_dial_act_id)
+                    for i in range(1, args.context):
+                        context_dial_act_id = str(int(dial_act_id) - i)
+                        if context_dial_act_id in dial_acts:
+                            context.append(context_dial_act_id)
 
-                context.reverse()
+                    context.reverse()
 
-                wav = " ".join(
-                    [
-                        '"| sox {} -r 16k -t wav -c 1 -b 16 -e signed - '
-                        + 'trim {} {} remix {}"'.format(
-                            sph[dialogue_id],
-                            dial_acts[c]["start"],
-                            dial_acts[c]["dur"],
-                            dial_acts[c]["channel"],
-                        )
-                        for c in context
-                    ]
-                )
+                    wav = " ".join(
+                        [
+                            '"| sox {} -r 16k -t wav -c 1 -b 16 -e signed - '
+                            + 'trim {} {} remix {}"'.format(
+                                sph[dialogue_id],
+                                dial_acts[c]["start"],
+                                dial_acts[c]["dur"],
+                                dial_acts[c]["channel"],
+                            )
+                            for c in context
+                        ]
+                    )
 
-                wav_scp_f.write(
-                    "{} sox {} -t wav - |\n".format(dial_acts[dial_act_id]["utt"], wav)
-                )
+                    wav_scp_f.write(
+                        "{} sox {} -t wav - |\n".format(dial_acts[dial_act_id]["utt"], wav)
+                    )
+
                 text_f.write(
                     dial_acts[dial_act_id]["utt"]
                     + " "

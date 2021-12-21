@@ -28,6 +28,7 @@ class HuggingFaceTransformersPostEncoder(AbsPostEncoder):
         self,
         input_size: int,
         model_name_or_path: str,
+        average_output: bool = False,
     ):
         """Initialize the module."""
         assert check_argument_types()
@@ -69,6 +70,8 @@ class HuggingFaceTransformersPostEncoder(AbsPostEncoder):
             self.use_inputs_embeds = False
             self.extend_attention_mask = True
 
+        self.average_output = average_output
+
         self.linear_in = torch.nn.Linear(
             input_size, self.transformer.config.hidden_size
         )
@@ -98,7 +101,15 @@ class HuggingFaceTransformersPostEncoder(AbsPostEncoder):
 
         output = self.transformer(**args).last_hidden_state
 
-        return output, input_lengths
+        if self.average_output:
+            output = output.mean(1).unsqueeze(1)
+            output_lengths = torch.ones_like(
+                input_lengths, device=input_lengths.device, dtype=input_lengths.dtype
+            )
+        else:
+            output_lengths = input_lengths
+
+        return output, output_lengths
 
     def reload_pretrained_parameters(self):
         self.transformer.load_state_dict(self.pretrained_params)

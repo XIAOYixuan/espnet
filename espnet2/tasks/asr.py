@@ -55,6 +55,10 @@ from espnet2.asr.preencoder.linear import LinearProjection
 from espnet2.asr.preencoder.sinc import LightweightSincConvs
 from espnet2.asr.specaug.abs_specaug import AbsSpecAug
 from espnet2.asr.specaug.specaug import SpecAug
+from espnet2.asr.teacher.abs_teacher import AbsTeacher
+from espnet2.asr.teacher.hugging_face_transformers_teacher import (
+    HuggingFaceTransformersTeacher,  # noqa: H301
+)
 from espnet2.layers.abs_normalize import AbsNormalize
 from espnet2.layers.global_mvn import GlobalMVN
 from espnet2.layers.utterance_mvn import UtteranceMVN
@@ -148,6 +152,15 @@ decoder_choices = ClassChoices(
     type_check=AbsDecoder,
     default="rnn",
 )
+teacher_choices = ClassChoices(
+    name="teacher",
+    classes=dict(
+        hugging_face_transformers=HuggingFaceTransformersTeacher,
+    ),
+    type_check=AbsTeacher,
+    default=None,
+    optional=True,
+)
 
 
 class ASRTask(AbsTask):
@@ -170,6 +183,8 @@ class ASRTask(AbsTask):
         postencoder_choices,
         # --decoder and --decoder_conf
         decoder_choices,
+        # --teacher and --teacher_conf
+        teacher_choices,
     ]
 
     # If you need to modify train() or eval() procedures, change Trainer class here
@@ -440,13 +455,16 @@ class ASRTask(AbsTask):
             postencoder = None
 
         # 5. Decoder
-        decoder_class = decoder_choices.get_class(args.decoder)
+        if args.decoder is not None:
+            decoder_class = decoder_choices.get_class(args.decoder)
 
-        decoder = decoder_class(
-            vocab_size=vocab_size,
-            encoder_output_size=encoder_output_size,
-            **args.decoder_conf,
-        )
+            decoder = decoder_class(
+                vocab_size=vocab_size,
+                encoder_output_size=encoder_output_size,
+                **args.decoder_conf,
+            )
+        else:
+            decoder = None
 
         # 6. CTC
         ctc = CTC(
@@ -456,7 +474,20 @@ class ASRTask(AbsTask):
         # 7. RNN-T Decoder (Not implemented)
         rnnt_decoder = None
 
-        # 8. Build model
+        # 8. Teacher for Teacher-Student learning
+        # NOTE(kan-bayashi): Use getattr to keep the compatibility
+        if getattr(args, "teacher", None) is not None:
+            teacher_class = teacher_choices.get_class(args.teacher)
+            teacher = teacher_class(
+                token_type=args.token_type,
+                token_list=args.token_list,
+                bpemodel=args.bpemodel,
+                **args.teacher_conf,
+            )
+        else:
+            teacher = None
+
+        # 9. Build model
         model = ESPnetASRModel(
             vocab_size=vocab_size,
             frontend=frontend,
@@ -468,6 +499,7 @@ class ASRTask(AbsTask):
             decoder=decoder,
             ctc=ctc,
             rnnt_decoder=rnnt_decoder,
+            teacher=teacher,
             token_list=token_list,
             **args.model_conf,
         )

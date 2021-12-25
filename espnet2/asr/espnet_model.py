@@ -23,6 +23,7 @@ from espnet2.asr.frontend.abs_frontend import AbsFrontend
 from espnet2.asr.postencoder.abs_postencoder import AbsPostEncoder
 from espnet2.asr.preencoder.abs_preencoder import AbsPreEncoder
 from espnet2.asr.specaug.abs_specaug import AbsSpecAug
+from espnet2.asr.teacher.abs_teacher import AbsTeacher
 from espnet2.layers.abs_normalize import AbsNormalize
 from espnet2.torch_utils.device_funcs import force_gatherable
 from espnet2.train.abs_espnet_model import AbsESPnetModel
@@ -49,9 +50,10 @@ class ESPnetASRModel(AbsESPnetModel):
         preencoder: Optional[AbsPreEncoder],
         encoder: AbsEncoder,
         postencoder: Optional[AbsPostEncoder],
-        decoder: AbsDecoder,
+        decoder: Optional[AbsDecoder],
         ctc: CTC,
         rnnt_decoder: None,
+        teacher: Optional[AbsTeacher],
         ctc_weight: float = 0.5,
         ignore_id: int = -1,
         lsm_weight: float = 0.0,
@@ -94,6 +96,7 @@ class ESPnetASRModel(AbsESPnetModel):
         else:
             self.ctc = ctc
         self.rnnt_decoder = rnnt_decoder
+        self.teacher = teacher
         self.criterion_att = LabelSmoothingLoss(
             size=vocab_size,
             padding_idx=ignore_id,
@@ -142,7 +145,7 @@ class ESPnetASRModel(AbsESPnetModel):
         encoder_out, encoder_out_lens = self.encode(speech, speech_lengths)
 
         # 2a. Attention-decoder branch
-        if self.ctc_weight == 1.0:
+        if self.ctc_weight == 1.0 or self.decoder is None:
             loss_att, acc_att, cer_att, wer_att = None, None, None, None
         else:
             loss_att, acc_att, cer_att, wer_att = self._calc_att_loss(
@@ -161,12 +164,35 @@ class ESPnetASRModel(AbsESPnetModel):
         if self.rnnt_decoder is not None:
             _ = self._calc_rnnt_loss(encoder_out, encoder_out_lens, text, text_lengths)
 
-        if self.ctc_weight == 0.0:
-            loss = loss_att
-        elif self.ctc_weight == 1.0:
-            loss = loss_ctc
+        # 2d. Teacher-Student learning
+        if self.teacher is not None:
+            if self.decoder is not None:
+                text_in, _ = add_sos_eos(
+                    text, self.sos, self.eos, self.ignore_id
+                )
+
+                decoder_out, _ = self.decoder(
+                    encoder_out, encoder_out_lens, text_in, text_lengths + 1
+                )
+            else:
+                decoder_out = None
+
+            loss = self.teacher(
+                encoder_out,
+                encoder_out_lens,
+                decoder_out,
+                speech,
+                speech_lengths,
+                text,
+                text_lengths,
+            )
         else:
-            loss = self.ctc_weight * loss_ctc + (1 - self.ctc_weight) * loss_att
+            if self.ctc_weight == 0.0:
+                loss = loss_att
+            elif self.ctc_weight == 1.0:
+                loss = loss_ctc
+            else:
+                loss = self.ctc_weight * loss_ctc + (1 - self.ctc_weight) * loss_att
 
         stats = dict(
             loss=loss.detach(),

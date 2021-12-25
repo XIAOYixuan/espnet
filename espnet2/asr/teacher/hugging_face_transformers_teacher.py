@@ -67,9 +67,7 @@ class HuggingFaceTransformersTeacher(AbsTeacher):
             param.requires_grad = False
 
         if token_type == "bpe":
-            self.tokenizer = build_tokenizer(
-                token_type=token_type, bpemodel=bpemodel
-            )
+            self.tokenizer = build_tokenizer(token_type=token_type, bpemodel=bpemodel)
         else:
             self.tokenizer = build_tokenizer(token_type=token_type)
 
@@ -101,6 +99,13 @@ class HuggingFaceTransformersTeacher(AbsTeacher):
         # Tokenize sentences
         encoded_input = self.teacher_tokenizer(
             sentences, padding=True, truncation=True, return_tensors="pt"
+        )
+
+        encoded_input["attention_mask"] = encoded_input["attention_mask"].to(
+            self.teacher_model.device
+        )
+        encoded_input["input_ids"] = encoded_input["input_ids"].to(
+            self.teacher_model.device
         )
 
         # Compute token embeddings

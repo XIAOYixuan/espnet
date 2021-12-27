@@ -9,6 +9,7 @@ from espnet2.asr.teacher.abs_teacher import AbsTeacher
 from espnet2.text.build_tokenizer import build_tokenizer
 from espnet2.text.token_id_converter import TokenIDConverter
 from espnet2.train.class_choices import ClassChoices
+from espnet2.utils.sized_dict import SizedDict
 from typeguard import check_argument_types
 from pathlib import Path
 from typing import Iterable
@@ -74,6 +75,8 @@ class HuggingFaceTransformersTeacher(AbsTeacher):
         self.converter = TokenIDConverter(token_list=token_list)
         self.average_output = average_output
 
+        self.cache = SizedDict(shared=True)
+
         loss_class = loss_choices.get_class(loss)
         self.loss = loss_class()
 
@@ -87,7 +90,7 @@ class HuggingFaceTransformersTeacher(AbsTeacher):
         text: Optional[torch.Tensor],
         text_lengths: Optional[torch.Tensor],
     ) -> torch.Tensor:
-        """Calculate the Teacher output and its distance from the Student output."""
+        """Calculate the Teacher output and Student output's distance from it."""
 
         sentences = []
 
@@ -96,31 +99,40 @@ class HuggingFaceTransformersTeacher(AbsTeacher):
             token = self.converter.ids2tokens(token_int)
             sentences.append(self.tokenizer.tokens2text(token).capitalize())
 
-        # Tokenize sentences
-        encoded_input = self.teacher_tokenizer(
-            sentences, padding=True, truncation=True, return_tensors="pt"
-        )
+        sentences_tuple = tuple(sentences)
 
-        encoded_input["attention_mask"] = encoded_input["attention_mask"].to(
-            self.teacher_model.device
-        )
-        encoded_input["input_ids"] = encoded_input["input_ids"].to(
-            self.teacher_model.device
-        )
-
-        # Compute token embeddings
-        with torch.no_grad():
-            teacher_model_output = self.teacher_model(**encoded_input)
-
-        if self.average_output:
-            # Perform pooling
-            teacher_model_output = mean_pooling(
-                teacher_model_output, encoded_input["attention_mask"]
+        if sentences_tuple in self.cache:
+            teacher_model_output = self.cache[sentences_tuple].to(
+                self.teacher_model.device
             )
-            # Normalize embeddings
-            teacher_model_output = torch.nn.functional.normalize(
-                teacher_model_output, p=2, dim=1
+        else:
+            # Tokenize sentences
+            encoded_input = self.teacher_tokenizer(
+                sentences, padding=True, truncation=True, return_tensors="pt"
             )
+
+            encoded_input["attention_mask"] = encoded_input["attention_mask"].to(
+                self.teacher_model.device
+            )
+            encoded_input["input_ids"] = encoded_input["input_ids"].to(
+                self.teacher_model.device
+            )
+
+            # Compute token embeddings
+            with torch.no_grad():
+                teacher_model_output = self.teacher_model(**encoded_input)
+
+            if self.average_output:
+                # Perform pooling
+                teacher_model_output = mean_pooling(
+                    teacher_model_output, encoded_input["attention_mask"]
+                )
+                # Normalize embeddings
+                teacher_model_output = torch.nn.functional.normalize(
+                    teacher_model_output, p=2, dim=1
+                )
+
+            self.cache[sentences_tuple] = teacher_model_output.detach().cpu()
 
         loss = self.loss(encoder_out, teacher_model_output.unsqueeze(1))
 

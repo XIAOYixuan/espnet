@@ -10,6 +10,7 @@ from espnet2.text.build_tokenizer import build_tokenizer
 from espnet2.text.token_id_converter import TokenIDConverter
 from espnet2.train.class_choices import ClassChoices
 from espnet2.utils.sized_dict import SizedDict
+from copy import deepcopy
 from typeguard import check_argument_types
 from pathlib import Path
 from typing import Iterable
@@ -18,7 +19,6 @@ from typing import Optional
 from typing import Tuple
 from typing import Union
 
-import copy
 import logging
 import torch
 
@@ -102,7 +102,7 @@ class HuggingFaceTransformersTeacher(AbsTeacher):
         sentences_tuple = tuple(sentences)
 
         if sentences_tuple in self.cache:
-            teacher_model_output = self.cache[sentences_tuple].to(
+            teacher_model_output = torch.tensor(self.cache[sentences_tuple]).to(
                 self.teacher_model.device
             )
         else:
@@ -132,7 +132,7 @@ class HuggingFaceTransformersTeacher(AbsTeacher):
                     teacher_model_output, p=2, dim=1
                 )
 
-            self.cache[sentences_tuple] = teacher_model_output.detach().cpu()
+            self.cache[sentences_tuple] = deepcopy(teacher_model_output.detach().cpu().numpy())
 
         loss = self.loss(encoder_out, teacher_model_output.unsqueeze(1))
 

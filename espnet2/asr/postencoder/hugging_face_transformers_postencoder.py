@@ -94,7 +94,7 @@ class HuggingFaceTransformersPostEncoder(AbsPostEncoder):
         input = input.permute(0, 2, 1)
 
         for i in range(len(self.length_adaptor_layers)):
-            input = self.length_adaptor_layers[i](input)
+            input = torch.relu(self.length_adaptor_layers[i](input))
 
         input = input.permute(0, 2, 1)
 

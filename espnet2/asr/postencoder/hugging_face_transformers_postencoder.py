@@ -29,6 +29,7 @@ class HuggingFaceTransformersPostEncoder(AbsPostEncoder):
         input_size: int,
         model_name_or_path: str,
         average_output: bool = False,
+        length_adaptor_n_layers: int = 0,
     ):
         """Initialize the module."""
         assert check_argument_types()
@@ -76,10 +77,31 @@ class HuggingFaceTransformersPostEncoder(AbsPostEncoder):
             input_size, self.transformer.config.hidden_size
         )
 
+        # Length Adaptor as in https://aclanthology.org/2021.acl-long.68.pdf
+
+        length_adaptor_layers = []
+
+        for _ in range(length_adaptor_n_layers):
+            length_adaptor_layers.append(torch.nn.Conv1d(input_size, input_size, 2, 2))
+
+        self.length_adaptor_layers = torch.nn.ModuleList(length_adaptor_layers)
+        self.length_adaptor_ratio = 2 ** length_adaptor_n_layers
+
     def forward(
         self, input: torch.Tensor, input_lengths: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Forward."""
+        input = input.permute(0, 2, 1)
+
+        for i in range(len(self.length_adaptor_layers)):
+            input = self.length_adaptor_layers[i](input)
+
+        input = input.permute(0, 2, 1)
+
+        input_lengths = input_lengths.div(
+            self.length_adaptor_ratio, rounding_mode="floor"
+        )
+
         input = self.linear_in(input)
 
         args = {"return_dict": True}

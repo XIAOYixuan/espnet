@@ -6,6 +6,10 @@
 
 from espnet.nets.pytorch_backend.nets_utils import make_pad_mask
 from espnet2.asr.teacher.abs_teacher import AbsTeacher
+from espnet2.asr.teacher.loss.square_alignment import (
+    SquareAlignmentL1Loss,
+    SquareAlignmentL2Loss,
+)
 from espnet2.text.build_tokenizer import build_tokenizer
 from espnet2.text.token_id_converter import TokenIDConverter
 from espnet2.train.class_choices import ClassChoices
@@ -31,7 +35,11 @@ except ImportError:
 
 loss_choices = ClassChoices(
     name="loss",
-    classes=dict(l1=torch.nn.L1Loss),
+    classes=dict(
+        l1=torch.nn.L1Loss,
+        square_alignment_l1=SquareAlignmentL1Loss,
+        square_alignment_l2=SquareAlignmentL2Loss,
+    ),
     type_check=torch.nn.Module,
     default="l1",
     optional=False,
@@ -48,7 +56,7 @@ class HuggingFaceTransformersTeacher(AbsTeacher):
         token_type: str,
         token_list: Union[Path, str, Iterable[str]],
         bpemodel: Union[Path, str, Iterable[str]],
-        average_output: bool = True,
+        average_output: bool = False,
     ):
         """Initialize the module."""
         assert check_argument_types()
@@ -61,11 +69,17 @@ class HuggingFaceTransformersTeacher(AbsTeacher):
                 " && ./installers/install_transformers.sh`."
             )
 
-        self.teacher_tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
-        self.teacher_model = AutoModel.from_pretrained(model_name_or_path)
+        model = AutoModel.from_pretrained(model_name_or_path)
+
+        if hasattr(model, "encoder"):
+            self.teacher_model = model.encoder
+        else:
+            self.teacher_model = model
 
         for param in self.teacher_model.parameters():
             param.requires_grad = False
+
+        self.teacher_tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
 
         if token_type == "bpe":
             self.tokenizer = build_tokenizer(token_type=token_type, bpemodel=bpemodel)
@@ -118,9 +132,13 @@ class HuggingFaceTransformersTeacher(AbsTeacher):
                 self.teacher_model.device
             )
 
+            encoded_input["return_dict"] = True
+
             # Compute token embeddings
             with torch.no_grad():
-                teacher_model_output = self.teacher_model(**encoded_input)
+                teacher_model_output = self.teacher_model(
+                    **encoded_input
+                ).last_hidden_state
 
             if self.average_output:
                 # Perform pooling
@@ -131,23 +149,23 @@ class HuggingFaceTransformersTeacher(AbsTeacher):
                 teacher_model_output = torch.nn.functional.normalize(
                     teacher_model_output, p=2, dim=1
                 )
+                teacher_model_output = teacher_model_output.unsqueeze(1)
 
-            self.cache[sentences_tuple] = deepcopy(teacher_model_output.detach().cpu().numpy())
+            self.cache[sentences_tuple] = deepcopy(
+                teacher_model_output.detach().cpu().numpy()
+            )
 
-        loss = self.loss(encoder_out, teacher_model_output.unsqueeze(1))
+        loss = self.loss(encoder_out, teacher_model_output)
 
         return loss
 
 
-# Copy from https://huggingface.co/sentence-transformers/all-mpnet-base-v2
+# From https://huggingface.co/sentence-transformers/all-mpnet-base-v2
 # Mean Pooling - Take attention mask into account for correct averaging
 def mean_pooling(model_output, attention_mask):
-    token_embeddings = model_output[
-        0
-    ]  # First element of model_output contains all token embeddings
     input_mask_expanded = (
-        attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+        attention_mask.unsqueeze(-1).expand(model_output.size()).float()
     )
-    return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(
+    return torch.sum(model_output * input_mask_expanded, 1) / torch.clamp(
         input_mask_expanded.sum(1), min=1e-9
     )

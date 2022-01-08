@@ -71,7 +71,7 @@ class HuggingFaceTransformersTeacher(AbsTeacher):
 
         model = AutoModel.from_pretrained(model_name_or_path)
 
-        if hasattr(model, "encoder"):
+        if model.config.is_encoder_decoder:
             self.teacher_model = model.encoder
         else:
             self.teacher_model = model

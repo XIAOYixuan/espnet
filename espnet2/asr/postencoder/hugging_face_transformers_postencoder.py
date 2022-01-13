@@ -79,11 +79,15 @@ class HuggingFaceTransformersPostEncoder(AbsPostEncoder):
 
         # Length Adaptor as in https://aclanthology.org/2021.acl-long.68.pdf
 
-        length_adaptor_layers = [torch.nn.Identity()]
-
-        for _ in range(length_adaptor_n_layers):
-            length_adaptor_layers.append(torch.nn.Conv1d(input_size, input_size, 2, 2))
-            length_adaptor_layers.append(torch.nn.ReLU())
+        if length_adaptor_n_layers > 0:
+            length_adaptor_layers = []
+            for _ in range(length_adaptor_n_layers):
+                length_adaptor_layers.append(
+                    torch.nn.Conv1d(input_size, input_size, 2, 2)
+                )
+                length_adaptor_layers.append(torch.nn.ReLU())
+        else:
+            length_adaptor_layers = [torch.nn.Identity()]
 
         self.length_adaptor = torch.nn.Sequential(*length_adaptor_layers)
         self.length_adaptor_ratio = 2 ** length_adaptor_n_layers

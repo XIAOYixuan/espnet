@@ -111,7 +111,7 @@ class HuggingFaceTransformersTeacher(AbsTeacher):
         for i in range(text.shape[0]):
             token_int = text[i][: text_lengths[i]].tolist()
             token = self.converter.ids2tokens(token_int)
-            sentences.append(self.tokenizer.tokens2text(token).capitalize())
+            sentences.append(self.tokenizer.tokens2text(token))
 
         sentences_tuple = tuple(sentences)
 

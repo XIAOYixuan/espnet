@@ -9,6 +9,8 @@ from espnet2.asr.teacher.abs_teacher import AbsTeacher
 from espnet2.asr.teacher.loss.square_alignment import (
     SquareAlignmentL1Loss,
     SquareAlignmentL2Loss,
+    NormalizedSquareAlignmentL1Loss,
+    NormalizedSquareAlignmentL2Loss,
 )
 from espnet2.text.build_tokenizer import build_tokenizer
 from espnet2.text.token_id_converter import TokenIDConverter
@@ -39,6 +41,8 @@ loss_choices = ClassChoices(
         l1=torch.nn.L1Loss,
         square_alignment_l1=SquareAlignmentL1Loss,
         square_alignment_l2=SquareAlignmentL2Loss,
+        normalized_square_alignment_l1=NormalizedSquareAlignmentL1Loss,
+        normalized_square_alignment_l2=NormalizedSquareAlignmentL2Loss,
     ),
     type_check=torch.nn.Module,
     default="l1",

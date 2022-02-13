@@ -15,6 +15,9 @@ from typeguard import check_return_type
 from espnet2.asr.ctc import CTC
 from espnet2.asr.decoder.abs_decoder import AbsDecoder
 from espnet2.asr.decoder.mlm_decoder import MLMDecoder
+from espnet2.asr.decoder.hugging_face_transformers_decoder import (
+    HuggingFaceTransformersDecoder,  # noqa: H301
+)
 from espnet2.asr.decoder.rnn_decoder import RNNDecoder
 from espnet2.asr.decoder.transformer_decoder import (
     DynamicConvolution2DTransformerDecoder,  # noqa: H301
@@ -165,6 +168,7 @@ decoder_choices = ClassChoices(
         rnn=RNNDecoder,
         transducer=TransducerDecoder,
         mlm=MLMDecoder,
+        hugging_face_transformers=HuggingFaceTransformersDecoder,
     ),
     type_check=AbsDecoder,
     default="rnn",
@@ -259,7 +263,7 @@ class ASRTask(AbsTask):
             "--token_type",
             type=str,
             default="bpe",
-            choices=["bpe", "char", "word", "phn"],
+            choices=["bpe", "char", "word", "phn", "hugging_face"],
             help="The text will be tokenized " "in the specified level token",
         )
         group.add_argument(

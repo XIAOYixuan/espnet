@@ -28,6 +28,8 @@ class HuggingFaceTransformersPostEncoder(AbsPostEncoder):
         self,
         input_size: int,
         model_name_or_path: str,
+        average_output: bool = False,
+        length_adaptor_n_layers: int = 0,
     ):
         """Initialize the module."""
         assert check_argument_types()
@@ -69,14 +71,39 @@ class HuggingFaceTransformersPostEncoder(AbsPostEncoder):
             self.use_inputs_embeds = False
             self.extend_attention_mask = True
 
+        self.average_output = average_output
+
         self.linear_in = torch.nn.Linear(
             input_size, self.transformer.config.hidden_size
         )
+
+        # Length Adaptor as in https://aclanthology.org/2021.acl-long.68.pdf
+
+        if length_adaptor_n_layers > 0:
+            length_adaptor_layers = []
+            for _ in range(length_adaptor_n_layers):
+                length_adaptor_layers.append(
+                    torch.nn.Conv1d(input_size, input_size, 2, 2)
+                )
+                length_adaptor_layers.append(torch.nn.ReLU())
+        else:
+            length_adaptor_layers = [torch.nn.Identity()]
+
+        self.length_adaptor = torch.nn.Sequential(*length_adaptor_layers)
+        self.length_adaptor_ratio = 2 ** length_adaptor_n_layers
 
     def forward(
         self, input: torch.Tensor, input_lengths: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Forward."""
+        input = input.permute(0, 2, 1)
+        input = self.length_adaptor(input)
+        input = input.permute(0, 2, 1)
+
+        input_lengths = input_lengths.div(
+            self.length_adaptor_ratio, rounding_mode="floor"
+        )
+
         input = self.linear_in(input)
 
         args = {"return_dict": True}
@@ -98,7 +125,15 @@ class HuggingFaceTransformersPostEncoder(AbsPostEncoder):
 
         output = self.transformer(**args).last_hidden_state
 
-        return output, input_lengths
+        if self.average_output:
+            output = output.mean(1).unsqueeze(1)
+            output_lengths = torch.ones_like(
+                input_lengths, device=input_lengths.device, dtype=input_lengths.dtype
+            )
+        else:
+            output_lengths = input_lengths
+
+        return output, output_lengths
 
     def reload_pretrained_parameters(self):
         self.transformer.load_state_dict(self.pretrained_params)

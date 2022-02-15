@@ -107,7 +107,6 @@ class HuggingFaceTransformersDecoder(AbsDecoder, BatchScorerInterface):
     def forward_one_step(
         self,
         tgt: torch.Tensor,
-        tgt_mask: torch.Tensor,
         memory: torch.Tensor,
         cache: List[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, List[torch.Tensor]]:
@@ -121,14 +120,19 @@ class HuggingFaceTransformersDecoder(AbsDecoder, BatchScorerInterface):
             memory: encoded memory, float32  (batch, maxlen_in, feat)
             cache: cached output list of (batch, max_time_out-1, size)
         Returns:
-            y, cache: NN output value and cache per `self.decoders`.
+            y, cache: NN output value and cache.
             y.shape is (batch, maxlen_out, token)
         """
-        raise NotImplementedError
-
-    def score(self, ys, state, x):
-        """Score."""
-        raise NotImplementedError
+        args = {"return_dict": True, "use_cache": True}
+        args["input_ids"] = tgt
+        if cache:
+            args["past_key_values"] = tuple(cache)
+        args["encoder_hidden_states"] = self.linear_in(memory)
+        decoder_output = self.decoder(**args)
+        y = decoder_output.last_hidden_state[:, -1]
+        logp = torch.log_softmax(self.lm_head(y), dim=-1)
+        states = list(decoder_output.past_key_values)
+        return logp, states
 
     def batch_score(
         self, ys: torch.Tensor, states: List[Any], xs: torch.Tensor
@@ -147,4 +151,26 @@ class HuggingFaceTransformersDecoder(AbsDecoder, BatchScorerInterface):
                 and next state list for ys.
 
         """
-        raise NotImplementedError
+        # merge states
+        n_batch = len(ys)
+        n_layers = len(self.decoder.layers)
+        if states[0] is None:
+            batch_state = None
+        else:
+            # transpose state of [batch, layer] into [layer, batch]
+            batch_state = []
+            for n in range(n_layers):
+                past_key_values = [
+                    torch.stack([states[b][n][k] for b in range(n_batch)])
+                    for k in range(4)
+                ]
+                batch_state.append(tuple(past_key_values))
+
+        logp, states = self.forward_one_step(ys, xs, cache=batch_state)
+
+        # transpose state of [layer, batch] into [batch, layer]
+        state_list = [
+            [[states[i][k][b] for k in range(4)] for i in range(n_layers)]
+            for b in range(n_batch)
+        ]
+        return logp, state_list

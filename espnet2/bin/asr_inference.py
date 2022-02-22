@@ -187,7 +187,7 @@ class Speech2Text:
 
         if token_type is None:
             tokenizer = None
-        elif token_type == "bpe":
+        elif token_type == "bpe" or token_type == "hugging_face":
             if bpemodel is not None:
                 tokenizer = build_tokenizer(token_type=token_type, bpemodel=bpemodel)
             else:

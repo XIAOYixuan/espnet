@@ -56,6 +56,7 @@ class HuggingFaceTransformersDecoder(AbsDecoder, BatchScorerInterface):
         model = AutoModelForSeq2SeqLM.from_pretrained(model_name_or_path)
         self.decoder = model.model.decoder
         self.lm_head = model.lm_head
+        self.model_name_or_path = model_name_or_path
 
         self.decoder_pretrained_params = copy.deepcopy(self.decoder.state_dict())
         self.lm_head_pretrained_params = copy.deepcopy(self.lm_head.state_dict())

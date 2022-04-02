@@ -30,6 +30,7 @@ class HuggingFaceTransformersPostEncoder(AbsPostEncoder):
         model_name_or_path: str,
         average_output: bool = False,
         length_adaptor_n_layers: int = 0,
+        lang_token_id: int = -1,
     ):
         """Initialize the module."""
         assert check_argument_types()
@@ -49,12 +50,35 @@ class HuggingFaceTransformersPostEncoder(AbsPostEncoder):
         else:
             self.transformer = model
 
+        self.lang_token_embed = None
+
         if hasattr(self.transformer, "embed_tokens"):
+            if lang_token_id != -1:
+                self.lang_token_embed = (
+                    self.transformer.embed_tokens(torch.tensor(lang_token_id))
+                    .detach()
+                    .cpu()
+                )
             del self.transformer.embed_tokens
         if hasattr(self.transformer, "wte"):
+            if lang_token_id != -1:
+                self.lang_token_embed = (
+                    self.transformer.wte(torch.tensor(lang_token_id)).detach().cpu()
+                )
             del self.transformer.wte
         if hasattr(self.transformer, "word_embedding"):
+            if lang_token_id != -1:
+                self.lang_token_embed = (
+                    self.transformer.word_embedding(torch.tensor(lang_token_id))
+                    .detach()
+                    .cpu()
+                )
             del self.transformer.word_embedding
+
+        if self.lang_token_embed is not None and hasattr(
+            self.transformer, "embed_scale"
+        ):
+            self.lang_token_embed *= self.transformer.embed_scale
 
         self.pretrained_params = copy.deepcopy(self.transformer.state_dict())
 
@@ -90,7 +114,7 @@ class HuggingFaceTransformersPostEncoder(AbsPostEncoder):
             length_adaptor_layers = [torch.nn.Identity()]
 
         self.length_adaptor = torch.nn.Sequential(*length_adaptor_layers)
-        self.length_adaptor_ratio = 2 ** length_adaptor_n_layers
+        self.length_adaptor_ratio = 2**length_adaptor_n_layers
 
     def forward(
         self, input: torch.Tensor, input_lengths: torch.Tensor
@@ -105,6 +129,15 @@ class HuggingFaceTransformersPostEncoder(AbsPostEncoder):
         )
 
         input = self.linear_in(input)
+
+        if self.lang_token_embed is not None:
+            lang_token_embed = (
+                self.lang_token_embed.unsqueeze(0)
+                .unsqueeze(0)
+                .repeat(input.size(0), 1, 1)
+            )
+            input = torch.cat([lang_token_embed, input], dim=1)
+            input_lengths = input_lengths + 1
 
         args = {"return_dict": True}
 

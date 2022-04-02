@@ -42,6 +42,7 @@ class HuggingFaceTransformersDecoder(AbsDecoder, BatchScorerInterface):
         vocab_size: int,
         encoder_output_size: int,
         model_name_or_path: str,
+        lang_token_id: int = -1,
     ):
         assert check_argument_types()
         super().__init__()
@@ -90,6 +91,9 @@ class HuggingFaceTransformersDecoder(AbsDecoder, BatchScorerInterface):
             olens: (batch, )
         """
         args = {"return_dict": True}
+
+        if self.decoder.__class__.__name__ == "MBartDecoder":
+            ys_in_pad[:, 0] = 2
 
         args["input_ids"] = ys_in_pad
         mask = (~make_pad_mask(ys_in_lens)).to(ys_in_pad.device).float()

@@ -146,10 +146,10 @@ class Speech2Text:
             hugging_face_model.model.decoder.load_state_dict(
                 decoder.decoder.state_dict()
             )
-            hugging_face_model.model.encoder = None
+            del hugging_face_model.model.encoder
 
-            asr_model.decoder.lm_head = None
-            asr_model.decoder.decoder = None
+            del asr_model.decoder.lm_head
+            del asr_model.decoder.decoder
 
             hugging_face_linear_in = decoder.linear_in
             hugging_face_model.to(device=device).eval()

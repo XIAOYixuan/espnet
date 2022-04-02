@@ -66,6 +66,7 @@ class ESPnetASRModel(AbsESPnetModel):
         sym_sos: str = "<sos/eos>",
         sym_eos: str = "<sos/eos>",
         extract_feats_in_collect_stats: bool = True,
+        lang_token_id: int = -1,
     ):
         assert check_argument_types()
         assert 0.0 <= ctc_weight <= 1.0, ctc_weight
@@ -155,6 +156,11 @@ class ESPnetASRModel(AbsESPnetModel):
             self.ctc = ctc
 
         self.extract_feats_in_collect_stats = extract_feats_in_collect_stats
+
+        if lang_token_id != -1:
+            self.lang_token_id = torch.tensor([[lang_token_id]])
+        else:
+            self.lang_token_id = None
 
     def forward(
         self,
@@ -473,6 +479,12 @@ class ESPnetASRModel(AbsESPnetModel):
         ys_pad: torch.Tensor,
         ys_pad_lens: torch.Tensor,
     ):
+        if self.lang_token_id is not None:
+            ys_pad = torch.cat(
+                [self.lang_token_id.repeat(ys_pad.size(0), 1), ys_pad], dim=1
+            )
+            ys_pad_lens += 1
+
         ys_in_pad, ys_out_pad = add_sos_eos(ys_pad, self.sos, self.eos, self.ignore_id)
         ys_in_lens = ys_pad_lens + 1
 

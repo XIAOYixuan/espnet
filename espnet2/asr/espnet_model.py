@@ -481,7 +481,11 @@ class ESPnetASRModel(AbsESPnetModel):
     ):
         if self.lang_token_id is not None:
             ys_pad = torch.cat(
-                [self.lang_token_id.repeat(ys_pad.size(0), 1), ys_pad], dim=1
+                [
+                    self.lang_token_id.repeat(ys_pad.size(0), 1).to(ys_pad.device),
+                    ys_pad,
+                ],
+                dim=1,
             )
             ys_pad_lens += 1
 

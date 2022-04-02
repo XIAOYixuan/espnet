@@ -136,7 +136,7 @@ class HuggingFaceTransformersPostEncoder(AbsPostEncoder):
                 .unsqueeze(0)
                 .repeat(input.size(0), 1, 1)
             )
-            input = torch.cat([lang_token_embed, input], dim=1)
+            input = torch.cat([lang_token_embed.to(input.device), input], dim=1)
             input_lengths = input_lengths + 1
 
         args = {"return_dict": True}

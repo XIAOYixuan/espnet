@@ -20,6 +20,7 @@ from espnet2.asr.ctc import CTC
 from espnet2.asr.decoder.abs_decoder import AbsDecoder
 from espnet2.asr.encoder.abs_encoder import AbsEncoder
 from espnet2.asr.frontend.abs_frontend import AbsFrontend
+from espnet2.asr.generator.abs_generator import AbsGenerator
 from espnet2.asr.postencoder.abs_postencoder import AbsPostEncoder
 from espnet2.asr.preencoder.abs_preencoder import AbsPreEncoder
 from espnet2.asr.specaug.abs_specaug import AbsSpecAug
@@ -51,6 +52,7 @@ class ESPnetASRModel(AbsESPnetModel):
         preencoder: Optional[AbsPreEncoder],
         encoder: AbsEncoder,
         postencoder: Optional[AbsPostEncoder],
+        generator: Optional[AbsGenerator],
         decoder: AbsDecoder,
         ctc: CTC,
         joint_network: Optional[torch.nn.Module],
@@ -63,6 +65,7 @@ class ESPnetASRModel(AbsESPnetModel):
         sym_space: str = "<space>",
         sym_blank: str = "<blank>",
         extract_feats_in_collect_stats: bool = True,
+        reconstruction_loss: str = "",
     ):
         assert check_argument_types()
         assert 0.0 <= ctc_weight <= 1.0, ctc_weight
@@ -82,6 +85,7 @@ class ESPnetASRModel(AbsESPnetModel):
         self.normalize = normalize
         self.preencoder = preencoder
         self.postencoder = postencoder
+        self.generator = generator
         self.encoder = encoder
 
         self.use_transducer_decoder = joint_network is not None
@@ -138,6 +142,16 @@ class ESPnetASRModel(AbsESPnetModel):
                     token_list, sym_space, sym_blank, report_cer, report_wer
                 )
 
+        if reconstruction_loss:
+            if reconstruction_loss == "l1":
+                self.reconstruction_loss = torch.nn.L1Loss()
+            else:
+                raise ValueError(
+                    "Invalid value for reconstruction_loss: {}".format(
+                        reconstruction_loss
+                    )
+                )
+
         if ctc_weight == 0.0:
             self.ctc = None
         else:
@@ -174,7 +188,12 @@ class ESPnetASRModel(AbsESPnetModel):
         text = text[:, : text_lengths.max()]
 
         # 1. Encoder
-        encoder_out, encoder_out_lens = self.encode(speech, speech_lengths)
+        encoder_out, encoder_out_lens, feats, feats_lengths = self.encode(
+            speech, speech_lengths, True
+        )
+
+        if self.reconstruction_loss is not None:
+            generator_out, generator_out_lens = self.generator(encoder_out, encoder_out_lens)
 
         loss_att, acc_att, cer_att, wer_att = None, None, None, None
         loss_ctc, cer_ctc = None, None
@@ -263,8 +282,14 @@ class ESPnetASRModel(AbsESPnetModel):
         return {"feats": feats, "feats_lengths": feats_lengths}
 
     def encode(
-        self, speech: torch.Tensor, speech_lengths: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        self,
+        speech: torch.Tensor,
+        speech_lengths: torch.Tensor,
+        return_feats: bool = False,
+    ) -> Union[
+        Tuple[torch.Tensor, torch.Tensor],
+        Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+    ]:
         """Frontend + Encoder. Note that this method is used by asr_inference.py
 
         Args:
@@ -307,7 +332,12 @@ class ESPnetASRModel(AbsESPnetModel):
             encoder_out_lens.max(),
         )
 
-        return encoder_out, encoder_out_lens
+        if return_feats:
+            result = [encoder_out, encoder_out_lens, feats, feats_lengths]
+        else:
+            result = [encoder_out, encoder_out_lens]
+
+        return tuple(result)
 
     def _extract_feats(
         self, speech: torch.Tensor, speech_lengths: torch.Tensor

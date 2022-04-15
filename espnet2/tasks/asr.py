@@ -45,6 +45,8 @@ from espnet2.asr.frontend.abs_frontend import AbsFrontend
 from espnet2.asr.frontend.default import DefaultFrontend
 from espnet2.asr.frontend.fused import FusedFrontends
 from espnet2.asr.frontend.s3prl import S3prlFrontend
+from espnet2.asr.generator.abs_generator import AbsGenerator
+from espnet2.asr.generator.conformer_generator import ConformerGenerator
 from espnet2.asr.frontend.windowing import SlidingWindow
 from espnet2.asr.postencoder.abs_postencoder import AbsPostEncoder
 from espnet2.asr.postencoder.hugging_face_transformers_postencoder import (
@@ -153,6 +155,15 @@ decoder_choices = ClassChoices(
     type_check=AbsDecoder,
     default="rnn",
 )
+generator_choices = ClassChoices(
+    "generator",
+    classes=dict(
+        conformer=ConformerGenerator,
+    ),
+    type_check=AbsGenerator,
+    default=None,
+    optional=True,
+)
 
 
 class ASRTask(AbsTask):
@@ -175,6 +186,8 @@ class ASRTask(AbsTask):
         postencoder_choices,
         # --decoder and --decoder_conf
         decoder_choices,
+        # --generator and --generator_conf
+        generator_choices,
     ]
 
     # If you need to modify train() or eval() procedures, change Trainer class here
@@ -450,6 +463,20 @@ class ASRTask(AbsTask):
         else:
             postencoder = None
 
+        # 5. Reconstruction Decoder block
+        # NOTE(kan-bayashi): Use getattr to keep the compatibility
+        if getattr(args, "generator", None) is not None:
+            generator_class = generator_choices.get_class(
+                args.generator
+            )
+            generator = generator_class(
+                input_size=encoder_output_size,
+                output_size=input_size,
+                **args.generator_conf
+            )
+        else:
+            generator = None
+
         # 5. Decoder
         decoder_class = decoder_choices.get_class(args.decoder)
 
@@ -489,6 +516,7 @@ class ASRTask(AbsTask):
             preencoder=preencoder,
             encoder=encoder,
             postencoder=postencoder,
+            generator=generator,
             decoder=decoder,
             ctc=ctc,
             joint_network=joint_network,

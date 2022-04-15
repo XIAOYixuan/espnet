@@ -11,6 +11,7 @@ import torch
 from typeguard import check_argument_types
 
 from espnet.nets.e2e_asr_common import ErrorCalculator
+from espnet.nets.pytorch_backend.nets_utils import make_non_pad_mask
 from espnet.nets.pytorch_backend.nets_utils import th_accuracy
 from espnet.nets.pytorch_backend.transformer.add_sos_eos import add_sos_eos
 from espnet.nets.pytorch_backend.transformer.label_smoothing_loss import (
@@ -66,6 +67,7 @@ class ESPnetASRModel(AbsESPnetModel):
         sym_blank: str = "<blank>",
         extract_feats_in_collect_stats: bool = True,
         reconstruction_loss: str = "",
+        reconstruction_weight: float = 1.0,
     ):
         assert check_argument_types()
         assert 0.0 <= ctc_weight <= 1.0, ctc_weight
@@ -78,6 +80,7 @@ class ESPnetASRModel(AbsESPnetModel):
         self.vocab_size = vocab_size
         self.ignore_id = ignore_id
         self.ctc_weight = ctc_weight
+        self.reconstruction_weight = reconstruction_weight
         self.token_list = token_list.copy()
 
         self.frontend = frontend
@@ -188,12 +191,9 @@ class ESPnetASRModel(AbsESPnetModel):
         text = text[:, : text_lengths.max()]
 
         # 1. Encoder
-        encoder_out, encoder_out_lens, feats, feats_lengths = self.encode(
+        encoder_out, encoder_out_lens, feats, feats_lens = self.encode(
             speech, speech_lengths, True
         )
-
-        if self.reconstruction_loss is not None:
-            generator_out, generator_out_lens = self.generator(encoder_out, encoder_out_lens)
 
         loss_att, acc_att, cer_att, wer_att = None, None, None, None
         loss_ctc, cer_ctc = None, None
@@ -254,6 +254,13 @@ class ESPnetASRModel(AbsESPnetModel):
             stats["acc"] = acc_att
             stats["cer"] = cer_att
             stats["wer"] = wer_att
+
+        if self.reconstruction_loss is not None:
+            loss_reconstruction = self._calc_reconstruction_loss(
+                encoder_out, encoder_out_lens, feats, feats_lens
+            )
+            stats["loss_reconstruction"] = loss_reconstruction.detach()
+            loss = loss + self.reconstruction_weight * loss_reconstruction
 
         # Collect total loss stats
         stats["loss"] = loss.detach()
@@ -539,3 +546,24 @@ class ESPnetASRModel(AbsESPnetModel):
             )
 
         return loss_transducer, cer_transducer, wer_transducer
+
+    def _calc_reconstruction_loss(
+        self,
+        encoder_out: torch.Tensor,
+        encoder_out_lens: torch.Tensor,
+        feats: torch.Tensor,
+        feats_lens: torch.Tensor,
+    ):
+        generator_out, generator_out_lens = self.generator(
+            encoder_out, encoder_out_lens
+        )
+
+        mask = (
+            make_non_pad_mask(generator_out_lens).unsqueeze(-1).to(generator_out.device)
+        )
+        feats = feats[:, : generator_out.size(1), :].masked_select(mask)
+        generator_out = generator_out.masked_select(mask)
+
+        loss = self.reconstruction_loss(generator_out, feats)
+
+        return loss

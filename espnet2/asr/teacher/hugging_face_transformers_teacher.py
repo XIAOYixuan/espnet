@@ -12,6 +12,9 @@ from espnet2.asr.teacher.loss.square_alignment import (
     NormalizedSquareAlignmentL1Loss,
     NormalizedSquareAlignmentL2Loss,
 )
+from espnet2.asr.teacher.loss.rectangular_alignment import (
+    RectangularAlignmentLoss,
+)
 from espnet2.text.build_tokenizer import build_tokenizer
 from espnet2.text.token_id_converter import TokenIDConverter
 from espnet2.train.class_choices import ClassChoices
@@ -43,6 +46,7 @@ loss_choices = ClassChoices(
         square_alignment_l2=SquareAlignmentL2Loss,
         normalized_square_alignment_l1=NormalizedSquareAlignmentL1Loss,
         normalized_square_alignment_l2=NormalizedSquareAlignmentL2Loss,
+        rectangular_alignment=RectangularAlignmentLoss,
     ),
     type_check=torch.nn.Module,
     default="l1",
@@ -85,15 +89,13 @@ class HuggingFaceTransformersTeacher(AbsTeacher):
 
         self.teacher_tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
 
-        if token_type == "bpe":
+        if token_type == "bpe" or token_type == "hugging_face":
             self.tokenizer = build_tokenizer(token_type=token_type, bpemodel=bpemodel)
         else:
             self.tokenizer = build_tokenizer(token_type=token_type)
 
         self.converter = TokenIDConverter(token_list=token_list)
         self.average_output = average_output
-
-        self.cache = SizedDict(shared=True)
 
         loss_class = loss_choices.get_class(loss)
         self.loss = loss_class()
@@ -107,57 +109,52 @@ class HuggingFaceTransformersTeacher(AbsTeacher):
         speech_lengths: Optional[torch.Tensor],
         text: Optional[torch.Tensor],
         text_lengths: Optional[torch.Tensor],
+        lids: Optional[torch.Tensor],
     ) -> torch.Tensor:
         """Calculate the Teacher output and Student output's distance from it."""
 
-        sentences = []
-
-        for i in range(text.shape[0]):
-            token_int = text[i][: text_lengths[i]].tolist()
-            token = self.converter.ids2tokens(token_int)
-            sentences.append(self.tokenizer.tokens2text(token))
-
-        sentences_tuple = tuple(sentences)
-
-        if sentences_tuple in self.cache:
-            teacher_model_output = torch.tensor(self.cache[sentences_tuple]).to(
-                self.teacher_model.device
+        if self.tokenizer.model == self.teacher_tokenizer.name_or_path:
+            sentences = self.teacher_tokenizer.batch_decode(
+                text, skip_special_tokens=True
             )
         else:
-            # Tokenize sentences
-            encoded_input = self.teacher_tokenizer(
-                sentences, padding=True, truncation=True, return_tensors="pt"
+            sentences = []
+            for i in range(text.shape[0]):
+                token_int = text[i][: text_lengths[i]].tolist()
+                token = self.converter.ids2tokens(token_int)
+                sentences.append(self.tokenizer.tokens2text(token))
+
+        # Tokenize sentences
+        encoded_input = self.teacher_tokenizer(
+            sentences, padding=True, return_tensors="pt"
+        )
+
+        if lids is not None:
+            encoded_input["input_ids"][:, 0:1] = lids
+
+        encoded_input["attention_mask"] = encoded_input["attention_mask"].to(
+            self.teacher_model.device
+        )
+        encoded_input["input_ids"] = encoded_input["input_ids"].to(
+            self.teacher_model.device
+        )
+
+        encoded_input["return_dict"] = True
+
+        # Compute token embeddings
+        with torch.no_grad():
+            teacher_model_output = self.teacher_model(**encoded_input).last_hidden_state
+
+        if self.average_output:
+            # Perform pooling
+            teacher_model_output = mean_pooling(
+                teacher_model_output, encoded_input["attention_mask"]
             )
-
-            encoded_input["attention_mask"] = encoded_input["attention_mask"].to(
-                self.teacher_model.device
+            # Normalize embeddings
+            teacher_model_output = torch.nn.functional.normalize(
+                teacher_model_output, p=2, dim=1
             )
-            encoded_input["input_ids"] = encoded_input["input_ids"].to(
-                self.teacher_model.device
-            )
-
-            encoded_input["return_dict"] = True
-
-            # Compute token embeddings
-            with torch.no_grad():
-                teacher_model_output = self.teacher_model(
-                    **encoded_input
-                ).last_hidden_state
-
-            if self.average_output:
-                # Perform pooling
-                teacher_model_output = mean_pooling(
-                    teacher_model_output, encoded_input["attention_mask"]
-                )
-                # Normalize embeddings
-                teacher_model_output = torch.nn.functional.normalize(
-                    teacher_model_output, p=2, dim=1
-                )
-                teacher_model_output = teacher_model_output.unsqueeze(1)
-
-            self.cache[sentences_tuple] = deepcopy(
-                teacher_model_output.detach().cpu().numpy()
-            )
+            teacher_model_output = teacher_model_output.unsqueeze(1)
 
         loss = self.loss(encoder_out, teacher_model_output)
 

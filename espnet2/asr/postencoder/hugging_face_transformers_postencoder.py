@@ -7,6 +7,7 @@
 from espnet.nets.pytorch_backend.nets_utils import make_pad_mask
 from espnet2.asr.postencoder.abs_postencoder import AbsPostEncoder
 from typeguard import check_argument_types
+from typing import Optional
 from typing import Tuple
 
 import copy
@@ -49,12 +50,20 @@ class HuggingFaceTransformersPostEncoder(AbsPostEncoder):
         else:
             self.transformer = model
 
+        self.token_embeds = None
+
         if hasattr(self.transformer, "embed_tokens"):
+            self.token_embeds = self.transformer.embed_tokens
             del self.transformer.embed_tokens
         if hasattr(self.transformer, "wte"):
+            self.token_embeds = self.transformer.wte
             del self.transformer.wte
         if hasattr(self.transformer, "word_embedding"):
+            self.token_embeds = self.transformer.word_embedding
             del self.transformer.word_embedding
+
+        if self.token_embeds is not None:
+            self.token_embeds.requires_grad_(False)
 
         self.pretrained_params = copy.deepcopy(self.transformer.state_dict())
 
@@ -90,10 +99,13 @@ class HuggingFaceTransformersPostEncoder(AbsPostEncoder):
             length_adaptor_layers = [torch.nn.Identity()]
 
         self.length_adaptor = torch.nn.Sequential(*length_adaptor_layers)
-        self.length_adaptor_ratio = 2 ** length_adaptor_n_layers
+        self.length_adaptor_ratio = 2**length_adaptor_n_layers
 
     def forward(
-        self, input: torch.Tensor, input_lengths: torch.Tensor
+        self,
+        input: torch.Tensor,
+        input_lengths: torch.Tensor,
+        lids: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Forward."""
         input = input.permute(0, 2, 1)
@@ -105,6 +117,15 @@ class HuggingFaceTransformersPostEncoder(AbsPostEncoder):
         )
 
         input = self.linear_in(input)
+
+        if lids is not None:
+            lang_token_embeds = self.token_embeds(lids)
+
+            if hasattr(self.transformer, "embed_scale"):
+                lang_token_embeds *= self.transformer.embed_scale
+
+            input = torch.cat([lang_token_embeds.to(input.device), input], dim=1)
+            input_lengths = input_lengths + 1
 
         args = {"return_dict": True}
 

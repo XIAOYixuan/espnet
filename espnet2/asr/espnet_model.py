@@ -120,6 +120,7 @@ class ESPnetASRModel(AbsESPnetModel):
         speech_lengths: torch.Tensor,
         text: torch.Tensor,
         text_lengths: torch.Tensor,
+        lids: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]:
         """Frontend + Encoder + Decoder + Calc loss
 
@@ -128,6 +129,7 @@ class ESPnetASRModel(AbsESPnetModel):
             speech_lengths: (Batch, )
             text: (Batch, Length)
             text_lengths: (Batch,)
+            lids (Optional[Tensor]): Language ID tensor (B, 1).
         """
         assert text_lengths.dim() == 1, text_lengths.shape
         # Check that batch_size is unified
@@ -145,7 +147,7 @@ class ESPnetASRModel(AbsESPnetModel):
         text = text[:, : text_lengths.max()]
 
         # 1. Encoder
-        encoder_out, encoder_out_lens = self.encode(speech, speech_lengths)
+        encoder_out, encoder_out_lens = self.encode(speech, speech_lengths, lids=lids)
 
         # 2a. Attention-decoder branch
         if self.ctc_weight == 1.0 or self.decoder is None:
@@ -170,9 +172,7 @@ class ESPnetASRModel(AbsESPnetModel):
         # 2d. Teacher-Student learning
         if self.teacher is not None:
             if self.decoder is not None:
-                text_in, _ = add_sos_eos(
-                    text, self.sos, self.eos, self.ignore_id
-                )
+                text_in, _ = add_sos_eos(text, self.sos, self.eos, self.ignore_id)
 
                 decoder_out, _ = self.decoder(
                     encoder_out, encoder_out_lens, text_in, text_lengths + 1
@@ -188,6 +188,7 @@ class ESPnetASRModel(AbsESPnetModel):
                 speech_lengths,
                 text,
                 text_lengths,
+                lids=lids
             )
         else:
             if self.ctc_weight == 0.0:
@@ -231,7 +232,10 @@ class ESPnetASRModel(AbsESPnetModel):
         return {"feats": feats, "feats_lengths": feats_lengths}
 
     def encode(
-        self, speech: torch.Tensor, speech_lengths: torch.Tensor
+        self,
+        speech: torch.Tensor,
+        speech_lengths: torch.Tensor,
+        lids: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Frontend + Encoder. Note that this method is used by asr_inference.py
 
@@ -263,7 +267,7 @@ class ESPnetASRModel(AbsESPnetModel):
         # Post-encoder, e.g. NLU
         if self.postencoder is not None:
             encoder_out, encoder_out_lens = self.postencoder(
-                encoder_out, encoder_out_lens
+                encoder_out, encoder_out_lens, lids=lids
             )
 
         assert encoder_out.size(0) == speech.size(0), (

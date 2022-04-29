@@ -334,7 +334,9 @@ class ASRTask(AbsTask):
     ]:
         assert check_argument_types()
         # NOTE(kamo): int value = 0 is reserved by CTC-blank symbol
-        return CommonCollateFn(float_pad_value=0.0, int_pad_value=-1)
+        return CommonCollateFn(
+            float_pad_value=0.0, int_pad_value=-1, not_sequence=["lids"]
+        )
 
     @classmethod
     def build_preprocess_fn(
@@ -386,8 +388,7 @@ class ASRTask(AbsTask):
     def optional_data_names(
         cls, train: bool = True, inference: bool = False
     ) -> Tuple[str, ...]:
-        retval = ()
-        assert check_return_type(retval)
+        retval = ("lids",)
         return retval
 
     @classmethod

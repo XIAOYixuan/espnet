@@ -11,6 +11,8 @@ from typing import Union
 
 import numpy as np
 import torch
+from transformers import AutoModelForSeq2SeqLM
+from transformers.file_utils import ModelOutput
 from typeguard import check_argument_types
 from typeguard import check_return_type
 from typing import List
@@ -79,6 +81,7 @@ class Speech2Text:
         nbest: int = 1,
         streaming: bool = False,
         enh_s2t_task: bool = False,
+        hugging_face_decoder: bool = False,
     ):
         assert check_argument_types()
 
@@ -145,8 +148,34 @@ class Speech2Text:
                 **transducer_conf,
             )
             beam_search = None
+            hugging_face_model = None
+            hugging_face_linear_in = None
+        elif (
+            decoder.__class__.__name__ == "HuggingFaceTransformersDecoder"
+            and hugging_face_decoder
+        ):
+            hugging_face_model = AutoModelForSeq2SeqLM.from_pretrained(
+                decoder.model_name_or_path
+            )
+
+            hugging_face_model.lm_head.load_state_dict(decoder.lm_head.state_dict())
+            hugging_face_model.model.decoder.load_state_dict(
+                decoder.decoder.state_dict()
+            )
+            del hugging_face_model.model.encoder
+
+            del asr_model.decoder.lm_head
+            del asr_model.decoder.decoder
+
+            hugging_face_linear_in = decoder.linear_in
+            hugging_face_model.to(device=device).eval()
+
+            beam_search = None
+            beam_search_transducer = None
         else:
             beam_search_transducer = None
+            hugging_face_model = None
+            hugging_face_linear_in = None
 
             weights = dict(
                 decoder=1.0 - ctc_weight,
@@ -204,7 +233,7 @@ class Speech2Text:
 
         if token_type is None:
             tokenizer = None
-        elif token_type == "bpe":
+        elif token_type == "bpe" or token_type == "hugging_face":
             if bpemodel is not None:
                 tokenizer = build_tokenizer(token_type=token_type, bpemodel=bpemodel)
             else:
@@ -220,6 +249,9 @@ class Speech2Text:
         self.tokenizer = tokenizer
         self.beam_search = beam_search
         self.beam_search_transducer = beam_search_transducer
+        self.hugging_face_model = hugging_face_model
+        self.hugging_face_linear_in = hugging_face_linear_in
+        self.hugging_face_beam_size = beam_size
         self.maxlenratio = maxlenratio
         self.minlenratio = minlenratio
         self.device = device
@@ -269,6 +301,17 @@ class Speech2Text:
         # c. Passed the encoder result and the beam search
         if self.beam_search_transducer:
             nbest_hyps = self.beam_search_transducer(enc[0])
+        elif self.hugging_face_model:
+            yseq = self.hugging_face_model.generate(
+                encoder_outputs=ModelOutput(
+                    last_hidden_state=self.hugging_face_linear_in(enc)
+                ),
+                use_cache=True,
+                decoder_start_token_id=self.hugging_face_model.model.config.decoder_start_token_id,
+                num_beams=self.hugging_face_beam_size,
+                max_length=256,
+            )
+            nbest_hyps = [Hypothesis(yseq=yseq[0])]
         else:
             nbest_hyps = self.beam_search(
                 x=enc[0], maxlenratio=self.maxlenratio, minlenratio=self.minlenratio
@@ -365,6 +408,7 @@ def inference(
     transducer_conf: Optional[dict],
     streaming: bool,
     enh_s2t_task: bool,
+    hugging_face_decoder: bool,
 ):
     assert check_argument_types()
     if batch_size > 1:
@@ -409,6 +453,7 @@ def inference(
         nbest=nbest,
         streaming=streaming,
         enh_s2t_task=enh_s2t_task,
+        hugging_face_decoder=hugging_face_decoder,
     )
     speech2text = Speech2Text.from_pretrained(
         model_tag=model_tag,
@@ -593,6 +638,7 @@ def get_parser():
     group.add_argument("--lm_weight", type=float, default=1.0, help="RNNLM weight")
     group.add_argument("--ngram_weight", type=float, default=0.9, help="ngram weight")
     group.add_argument("--streaming", type=str2bool, default=False)
+    group.add_argument("--hugging_face_decoder", type=str2bool, default=False)
 
     group.add_argument(
         "--transducer_conf",

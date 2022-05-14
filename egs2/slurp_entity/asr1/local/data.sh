@@ -57,7 +57,9 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
     for x in test devel train; do
         mv data/${x}/text data/${x}/text_old
 	mv data/${x}/text_new data/${x}/text
+	mv data_old/${x} data/${x}_char
     done
+    rm -r data_old
 fi
 
 log "Successfully finished. [elapsed=${SECONDS}s]"
